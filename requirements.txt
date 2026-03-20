@@ -1,0 +1,14 @@
+numpy
+pandas
+matplotlib
+yfinance
+scipy
+ray
+tqdm
+arch
+statsmodels
+papermill
+ipykernel
+ipywidgets
+pyarrow
+jinja2
