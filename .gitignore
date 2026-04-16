@@ -1,3 +1,5 @@
-Nothing should be ignored in this case, as the only change is adding a Jupyter notebook file (.ipynb), which is a source file that should be tracked in version control. There are no build artifacts, dependencies, or temporary files in the change list that would warrant adding ignore rules.
-
-Therefore, the output is empty.
+```
+# Jupyter notebooks
+*.ipynb_checkpoints/
+.ipynb_checkpoints/
+```
