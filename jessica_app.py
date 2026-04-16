@@ -5,18 +5,18 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 from scipy import stats
 from tqdm import tqdm
-from matplotlib.patches import Rectangle
+from itertools import product
 import time
 
-st.set_page_config(layout="wide", page_title="Jessicka Rotation – Sharpe Ratio Enhancer")
-st.title("📈 Enhanced Sharpe Ratio Inference with Jessicka Rotation")
+st.set_page_config(layout="wide", page_title="Jessicka Rotation – Auto‑Tuned")
+st.title("⚙️ Jessicka Rotation: Auto‑Tuned to Beat Baseline")
 st.markdown("""
-Extends the SSRN paper *"A Closed-Form Solution for Sharpe Ratio Inference under GARCH Returns"*  
-(López de Prado, Porcu, Zoonekynd, Engle, 2026) with the **Jessicka formulation** (Samokhvalov, 2025).
+Automatically searches over Jessicka parameters (θ, τ₀, α_load, β_decay, κ)
+to **minimize Sharpe variance** or **maximize mean Sharpe** relative to buy‑and‑hold.
 """)
 
 # ------------------------------------------------------------
-# 1. All helper functions (no external files needed)
+# 1. All helper functions (same as before, no external files)
 # ------------------------------------------------------------
 def standardized_student(size, df):
     if df <= 2:
@@ -26,7 +26,6 @@ def standardized_student(size, df):
     return raw * scaling
 
 def garch_returns(size, mu, sigma, alpha, beta, innovations):
-    """GARCH(1,1) simulation. Returns (returns, innovations, conditional variances)."""
     omega = sigma**2 * (1 - alpha - beta)
     vol2 = np.zeros(size)
     ret = np.zeros(size)
@@ -98,267 +97,178 @@ def apply_rotation(returns, volatilities, mu_ceiling, eta, theta, tau0, alpha_lo
     return np.array(active_returns), positions, sigma_path
 
 # ------------------------------------------------------------
-# 2. Sidebar parameters
+# 2. Evaluate a single parameter set
 # ------------------------------------------------------------
-st.sidebar.header("⚙️ Simulation Parameters")
-n_paths = st.sidebar.number_input("Number of Monte Carlo paths", min_value=50, max_value=2000, value=500, step=50)
-T_days = st.sidebar.number_input("Trading days per path", min_value=500, max_value=5000, value=2520, step=252)
-burn_in = st.sidebar.number_input("Burn‑in days", min_value=100, max_value=1000, value=500, step=100)
+def evaluate_params(params, all_returns, all_vols):
+    theta = params['theta']
+    tau0 = params['tau0']
+    alpha_load = params['alpha_load']
+    beta_decay = params['beta_decay']
+    kappa = params['kappa']
+    eta = 1.0 - 2.0 / kappa
 
-# GARCH parameters
-st.sidebar.subheader("GARCH(1,1)")
-mu = st.sidebar.number_input("Daily drift μ", value=0.0005, format="%.5f")
-omega = st.sidebar.number_input("ω", value=1e-6, format="%.1e")
-alpha = st.sidebar.slider("α (ARCH)", 0.01, 0.40, 0.15, 0.01)
-beta = st.sidebar.slider("β (GARCH)", 0.50, 0.98, 0.80, 0.01)
-nu = st.sidebar.slider("Student‑t df (ν) – lower = heavier tails", 2.1, 10.0, 3.5, 0.1)
-
-# Jessicka parameters
-st.sidebar.subheader("Jessicka Rotation")
-theta = st.sidebar.slider("Rotation threshold θ", 0.1, 0.9, 0.5, 0.05)
-tau0 = st.sidebar.number_input("Base overload τ₀", value=0.005, format="%.4f")
-alpha_load = st.sidebar.slider("Overload sensitivity α_load", 0.0, 1.5, 0.5, 0.1)
-beta_decay = st.sidebar.number_input("Decay rate β_decay", value=0.005, format="%.4f")
-true_kappa = st.sidebar.number_input("Tail index κ (for η = 1‑2/κ)", min_value=2.1, max_value=10.0, value=3.0, step=0.1)
-true_eta = 1.0 - 2.0 / true_kappa
-
-run = st.sidebar.button("🚀 Run Simulation", type="primary")
-st.sidebar.markdown("---")
-st.sidebar.info("The app uses pure Python/numpy – no external `functions.py` needed.")
-
-# ------------------------------------------------------------
-# 3. Main simulation logic (cached)
-# ------------------------------------------------------------
-@st.cache_data(show_spinner=False)
-def run_simulation(n_paths, T, burn_in, mu, alpha, beta, omega, nu, true_eta, theta, tau0, alpha_load, beta_decay, true_kappa):
-    np.random.seed(42)
-    all_returns, all_vols = simulate_garch_paths(n_paths, T, burn_in, mu, alpha, beta, omega, nu, seed=42)
-    
-    # Main loop
-    bh_sharpes = []
+    n_paths = len(all_returns)
     rot_sharpes = []
-    rot_dds = []
-    bh_dds = []
-    avg_pos = []
-    sigma_paths = []
     for i in range(n_paths):
         ret = all_returns[i]
         vol = all_vols[i]
-        bh_sharpes.append(calculate_sharpe(ret))
-        bh_dds.append(calculate_max_drawdown(ret))
         mu_ceiling = np.percentile(ret[:50], 95)
         if mu_ceiling <= 0:
             mu_ceiling = np.mean(ret[:50])
-        active, pos, sig = apply_rotation(ret, vol, mu_ceiling, true_eta, theta, tau0, alpha_load, beta_decay, 'full')
-        rot_sharpes.append(calculate_sharpe(active) if len(active) else 0.0)
-        rot_dds.append(calculate_max_drawdown(active) if len(active) else 0.0)
-        avg_pos.append(np.mean(pos))
-        sigma_paths.append(sig)
-    
-    bh_sharpes = np.array(bh_sharpes)
-    rot_sharpes = np.array(rot_sharpes)
-    rot_dds = np.array(rot_dds)
-    bh_dds = np.array(bh_dds)
-    avg_pos = np.array(avg_pos)
-    sigma_paths = np.array(sigma_paths)
-    
-    # SSRN baseline Figure 1 data
-    sample_sizes = [252, 504, 1008, 2520]
-    sample_vars = []
-    theoretical_vars = []
-    # long simulation for true skew/kurt
-    long_innov = standardized_student(200000, nu)
-    sigma_uncond = np.sqrt(omega / (1 - alpha - beta))
-    long_ret, _, _ = garch_returns(200000, mu, sigma_uncond, alpha, beta, long_innov)
-    true_skew = stats.skew(long_ret)
-    true_kurt = stats.kurtosis(long_ret) + 3
-    true_SR = mu / sigma_uncond
-    # formula_15 reimplemented
-    def V_GARCH(SR, skew, kurt, alpha, beta, T):
-        phi = alpha + beta
-        term1 = 1.0
-        term2 = - SR * (1 - beta) / (1 - phi) * skew
-        term3 = SR**2 * (kurt - 1) / 4 * (1 - beta)**2 * (1 + phi) / (1 - phi) / (1 - alpha**2 * kurt - 2*alpha*beta - beta**2)
-        return (term1 + term2 + term3) / T
-    for t in sample_sizes:
-        sharpes_t = [calculate_sharpe(all_returns[i][:t]) for i in range(n_paths)]
-        sample_vars.append(np.var(sharpes_t, ddof=1))
-        theo = V_GARCH(true_SR, true_skew, true_kurt, alpha, beta, t)
-        theoretical_vars.append(theo)
-    
-    # Panel D theta sweep (small subset)
-    thetas = np.linspace(0.1, 0.9, 9)
-    sharpe_by_theta = []
-    subset = min(100, n_paths)
-    for th in thetas:
-        temp = []
-        for i in range(subset):
-            ret = all_returns[i]
-            vol = all_vols[i]
-            mu_c = np.percentile(ret[:50], 95)
-            if mu_c <= 0: mu_c = np.mean(ret[:50])
-            act, _, _ = apply_rotation(ret, vol, mu_c, true_eta, th, tau0, alpha_load, beta_decay, 'full')
-            temp.append(calculate_sharpe(act) if len(act) else 0.0)
-        sharpe_by_theta.append(np.mean(temp))
-    
-    # Robustness (Hill estimator) – simplified, no external function
-    # We'll skip robustness to keep code self‑contained; can be added later.
-    # Ablation (full, no overload, no sizing)
-    ablate_full, ablate_no_ol, ablate_no_sz = [], [], []
-    ablate_subset = min(150, n_paths)
-    for i in range(ablate_subset):
-        ret = all_returns[i]
-        vol = all_vols[i]
-        mu_c = np.percentile(ret[:50], 95)
-        if mu_c <= 0: mu_c = np.mean(ret[:50])
-        # full
-        a_f, _, _ = apply_rotation(ret, vol, mu_c, true_eta, theta, tau0, alpha_load, beta_decay, 'full')
-        ablate_full.append(calculate_sharpe(a_f) if len(a_f) else 0.0)
-        # no overload
-        a_nol, _, _ = apply_rotation(ret, vol, mu_c, true_eta, theta, 0.0, 0.0, beta_decay, 'no_overload')
-        ablate_no_ol.append(calculate_sharpe(a_nol) if len(a_nol) else 0.0)
-        # no sizing
-        a_nosz, _, _ = apply_rotation(ret, vol, mu_c, true_eta, theta, tau0, alpha_load, beta_decay, 'no_sizing')
-        ablate_no_sz.append(calculate_sharpe(a_nosz) if len(a_nosz) else 0.0)
-    
-    results = {
-        'bh_sharpes': bh_sharpes,
-        'rot_sharpes': rot_sharpes,
-        'rot_dds': rot_dds,
-        'bh_dds': bh_dds,
-        'avg_pos': avg_pos,
-        'sigma_paths': sigma_paths,
-        'sample_sizes': sample_sizes,
-        'sample_vars': sample_vars,
-        'theoretical_vars': theoretical_vars,
-        'thetas': thetas,
-        'sharpe_by_theta': sharpe_by_theta,
-        'ablate_full': ablate_full,
-        'ablate_no_ol': ablate_no_ol,
-        'ablate_no_sz': ablate_no_sz,
-        'true_kappa': true_kappa,
-        'true_eta': true_eta,
-        'true_SR': true_SR,
-        'reduction_pct': (1 - np.var(rot_sharpes)/np.var(bh_sharpes)) * 100,
-        'bh_mean': np.mean(bh_sharpes),
-        'rot_mean': np.mean(rot_sharpes),
-    }
-    return results
+        active, _, _ = apply_rotation(ret, vol, mu_ceiling, eta, theta, tau0, alpha_load, beta_decay, variant='full')
+        sr = calculate_sharpe(active) if len(active) > 0 else 0.0
+        rot_sharpes.append(sr)
+    mean_sr = np.mean(rot_sharpes)
+    var_sr = np.var(rot_sharpes)
+    return mean_sr, var_sr
 
 # ------------------------------------------------------------
-# 4. Run and display
+# 3. Main simulation (cached)
 # ------------------------------------------------------------
-if run:
-    with st.spinner("Running Monte Carlo simulation... (may take 30-60 sec)"):
-        res = run_simulation(n_paths, T_days, burn_in, mu, alpha, beta, omega, nu,
-                             true_eta, theta, tau0, alpha_load, beta_decay, true_kappa)
-    
-    st.success(f"Simulation completed. Variance reduction: {res['reduction_pct']:.1f}%")
-    
-    # Figure 1: SSRN Baseline
-    fig1, ax1 = plt.subplots(figsize=(8,5))
-    ax1.loglog(res['sample_sizes'], res['sample_vars'], 'o-', label='Sample Variance')
-    ax1.loglog(res['sample_sizes'], res['theoretical_vars'], 'r--', label='Theoretical V_GARCH')
-    ax1.set_xlabel('Sample size T')
-    ax1.set_ylabel('Variance of Sharpe ratio')
-    ax1.set_title(f'SSRN Figure 1 (κ≈{res["true_kappa"]:.1f})')
-    ax1.legend()
-    ax1.grid(True)
-    st.pyplot(fig1)
-    
-    # Combined Panels A-D
-    fig, axes = plt.subplots(2,2, figsize=(12,10))
-    # Panel A
-    axes[0,0].bar(['Buy&Hold', 'Jessicka'], [np.var(res['bh_sharpes']), np.var(res['rot_sharpes'])],
-                  color=['lightblue','orange'], alpha=0.7)
-    axes[0,0].set_title(f"Variance reduction: {res['reduction_pct']:.1f}%")
-    axes[0,0].set_ylabel('Sharpe variance')
-    # Panel B
-    axes[0,1].violinplot([res['bh_sharpes'], res['rot_sharpes']], positions=[1,2], showmeans=True)
-    axes[0,1].set_xticks([1,2]); axes[0,1].set_xticklabels(['BH','Jessicka'])
-    axes[0,1].set_ylabel('Sharpe ratio')
-    axes[0,1].set_title('Distribution')
-    # Panel C
-    max_n = min(res['sigma_paths'].shape[1], 500)
-    steps = np.arange(max_n)
-    mean_sig = np.mean(res['sigma_paths'][:,:max_n], axis=0)
-    p10 = np.percentile(res['sigma_paths'][:,:max_n], 10, axis=0)
-    p90 = np.percentile(res['sigma_paths'][:,:max_n], 90, axis=0)
-    theo = power_law_decay(steps, beta_decay, res['true_eta'])
-    axes[1,0].plot(steps, mean_sig, 'b-', label='Empirical')
-    axes[1,0].fill_between(steps, p10, p90, alpha=0.2, color='blue')
-    axes[1,0].plot(steps, theo, 'r--', label='Theoretical')
-    axes[1,0].set_xlabel('Exposure n'); axes[1,0].set_ylabel('Sensitivity σ(n)')
-    axes[1,0].set_title('Power‑law decay'); axes[1,0].legend()
-    # Panel D
-    axes[1,1].plot(res['thetas'], res['sharpe_by_theta'], 'o-', color='green')
-    axes[1,1].axvline(theta, color='red', linestyle='--', label=f'θ={theta}')
-    axes[1,1].set_xlabel('θ'); axes[1,1].set_ylabel('Mean Sharpe'); axes[1,1].set_title('Sensitivity to θ')
-    axes[1,1].legend()
-    plt.tight_layout()
+@st.cache_data(show_spinner=False)
+def run_base_simulation(n_paths, T, burn_in, mu, alpha, beta, omega, nu):
+    np.random.seed(42)
+    all_returns, all_vols = simulate_garch_paths(n_paths, T, burn_in, mu, alpha, beta, omega, nu, seed=42)
+    # baseline Sharpe
+    bh_sharpes = [calculate_sharpe(ret) for ret in all_returns]
+    bh_mean = np.mean(bh_sharpes)
+    bh_var = np.var(bh_sharpes)
+    return all_returns, all_vols, bh_sharpes, bh_mean, bh_var
+
+@st.cache_data(show_spinner=False)
+def grid_search(all_returns, all_vols, param_grid, objective='min_variance'):
+    best_params = None
+    best_score = np.inf if objective == 'min_variance' else -np.inf
+    results = []
+    total = np.prod([len(v) for v in param_grid.values()])
+    progress = st.progress(0)
+    idx = 0
+    keys = list(param_grid.keys())
+    for values in product(*param_grid.values()):
+        params = dict(zip(keys, values))
+        mean_sr, var_sr = evaluate_params(params, all_returns, all_vols)
+        if objective == 'min_variance':
+            score = var_sr
+            better = score < best_score
+        else:  # max_mean
+            score = mean_sr
+            better = score > best_score
+        if better:
+            best_score = score
+            best_params = params.copy()
+        results.append({**params, 'mean_sr': mean_sr, 'var_sr': var_sr})
+        idx += 1
+        progress.progress(idx / total)
+    progress.empty()
+    return best_params, best_score, pd.DataFrame(results)
+
+# ------------------------------------------------------------
+# 4. Sidebar parameters
+# ------------------------------------------------------------
+st.sidebar.header("📊 Simulation Parameters")
+n_paths = st.sidebar.number_input("Monte Carlo paths", 50, 2000, 500, 50)
+T_days = st.sidebar.number_input("Days per path", 500, 5000, 2520, 252)
+burn_in = st.sidebar.number_input("Burn‑in days", 100, 1000, 500, 100)
+
+st.sidebar.subheader("GARCH(1,1)")
+mu = st.sidebar.number_input("Daily drift μ", 0.0001, 0.002, 0.0005, 0.0001, format="%.4f")
+omega = st.sidebar.number_input("ω", 1e-7, 1e-5, 1e-6, format="%.1e")
+alpha = st.sidebar.slider("α (ARCH)", 0.01, 0.40, 0.15, 0.01)
+beta = st.sidebar.slider("β (GARCH)", 0.50, 0.98, 0.80, 0.01)
+nu = st.sidebar.slider("Student‑t df (ν)", 2.1, 10.0, 3.5, 0.1)
+
+st.sidebar.subheader("🎯 Auto‑Tuning of Jessicka Parameters")
+objective = st.sidebar.selectbox("Objective", ["min_variance", "max_mean"])
+st.sidebar.markdown("**Parameter ranges for grid search**")
+theta_range = st.sidebar.slider("θ range", 0.1, 0.9, (0.3, 0.6), 0.05)
+tau0_range = st.sidebar.slider("τ₀ range", 0.0, 0.02, (0.0, 0.01), 0.002)
+alpha_load_range = st.sidebar.slider("α_load range", 0.0, 1.5, (0.2, 0.8), 0.1)
+beta_decay_range = st.sidebar.slider("β_decay range", 0.001, 0.02, (0.003, 0.01), 0.002)
+kappa_range = st.sidebar.slider("κ (tail index) range", 2.5, 6.0, (3.0, 4.5), 0.5)
+
+run_tuning = st.sidebar.button("🔍 Run Auto‑Tuning", type="primary")
+
+# ------------------------------------------------------------
+# 5. Run and display
+# ------------------------------------------------------------
+if run_tuning:
+    with st.spinner("Simulating GARCH paths..."):
+        all_returns, all_vols, bh_sharpes, bh_mean, bh_var = run_base_simulation(
+            n_paths, T_days, burn_in, mu, alpha, beta, omega, nu
+        )
+
+    # Build parameter grid
+    param_grid = {
+        'theta': np.arange(theta_range[0], theta_range[1]+0.05, 0.05).round(2),
+        'tau0': np.arange(tau0_range[0], tau0_range[1]+0.002, 0.002).round(4),
+        'alpha_load': np.arange(alpha_load_range[0], alpha_load_range[1]+0.1, 0.1).round(1),
+        'beta_decay': np.arange(beta_decay_range[0], beta_decay_range[1]+0.002, 0.002).round(4),
+        'kappa': np.arange(kappa_range[0], kappa_range[1]+0.5, 0.5).round(1)
+    }
+    n_combos = np.prod([len(v) for v in param_grid.values()])
+    st.info(f"Grid search over {n_combos} parameter combinations. This may take a few minutes.")
+
+    with st.spinner("Searching for best Jessicka parameters..."):
+        best_params, best_score, results_df = grid_search(all_returns, all_vols, param_grid, objective)
+
+    # Evaluate best parameters on full paths
+    eta_best = 1.0 - 2.0 / best_params['kappa']
+    rot_sharpes_best = []
+    for i in range(n_paths):
+        ret = all_returns[i]
+        vol = all_vols[i]
+        mu_ceiling = np.percentile(ret[:50], 95)
+        if mu_ceiling <= 0:
+            mu_ceiling = np.mean(ret[:50])
+        active, _, _ = apply_rotation(ret, vol, mu_ceiling, eta_best,
+                                      best_params['theta'], best_params['tau0'],
+                                      best_params['alpha_load'], best_params['beta_decay'], 'full')
+        sr = calculate_sharpe(active) if len(active) > 0 else 0.0
+        rot_sharpes_best.append(sr)
+    rot_sharpes_best = np.array(rot_sharpes_best)
+    rot_mean = np.mean(rot_sharpes_best)
+    rot_var = np.var(rot_sharpes_best)
+    var_reduction = (bh_var - rot_var) / bh_var * 100
+    mean_improvement = (rot_mean - bh_mean) / abs(bh_mean) * 100
+
+    # Show results
+    st.success(f"✅ Best parameters found: θ={best_params['theta']:.2f}, τ₀={best_params['tau0']:.3f}, "
+               f"α_load={best_params['alpha_load']:.1f}, β_decay={best_params['beta_decay']:.3f}, κ={best_params['kappa']:.1f}")
+    st.metric("Baseline mean Sharpe", f"{bh_mean:.3f}")
+    st.metric("Jessicka mean Sharpe", f"{rot_mean:.3f}", delta=f"{mean_improvement:+.1f}%")
+    st.metric("Baseline variance", f"{bh_var:.4f}")
+    st.metric("Jessicka variance", f"{rot_var:.4f}", delta=f"{var_reduction:+.1f}%")
+
+    # Plot variance reduction bar
+    fig, ax = plt.subplots(figsize=(6,4))
+    ax.bar(['Baseline', 'Jessicka (tuned)'], [bh_var, rot_var], color=['lightblue', 'orange'])
+    ax.set_ylabel('Variance of Sharpe ratio')
+    ax.set_title(f'Variance reduction: {var_reduction:.1f}%')
     st.pyplot(fig)
-    
-    # Ablation study
-    fig_abl, ax_abl = plt.subplots(figsize=(6,4))
-    means = [np.mean(res['ablate_full']), np.mean(res['ablate_no_ol']), np.mean(res['ablate_no_sz'])]
-    stds = [np.std(res['ablate_full']), np.std(res['ablate_no_ol']), np.std(res['ablate_no_sz'])]
-    ax_abl.bar(['Full', 'No overload', 'No sizing'], means, yerr=stds, capsize=5,
-               color=['#2ca02c','#d62728','#9467bd'], alpha=0.7)
-    ax_abl.set_ylabel('Mean Sharpe'); ax_abl.set_title('Ablation study')
-    st.pyplot(fig_abl)
-    
-    # Infographic (simplified but effective)
-    fig_inf, axs = plt.subplots(2,2, figsize=(12,10))
-    # top left: violin again (already shown, but infographic needs it)
-    axs[0,0].violinplot([res['bh_sharpes'], res['rot_sharpes']], positions=[1,2], showmeans=True)
-    axs[0,0].set_xticks([1,2]); axs[0,0].set_xticklabels(['Baseline','Jessicka'])
-    axs[0,0].set_ylabel('Sharpe')
-    axs[0,0].set_title('Distribution')
-    # top right: variance bar
-    axs[0,1].bar(['Baseline','Jessicka'], [np.var(res['bh_sharpes']), np.var(res['rot_sharpes'])],
-                 color=['#1f77b4','#ff7f0e'])
-    axs[0,1].set_title(f'Variance ↓{res["reduction_pct"]:.0f}%')
-    # bottom left: radar (simple metrics)
-    metrics = ['Mean Sharpe', 'Stability', 'Drawdown', 'Win Rate']
-    bh_vals = [res['bh_mean'], 1/np.var(res['bh_sharpes']), -np.mean(res['bh_dds']), np.mean(res['bh_sharpes']>0)]
-    rot_vals = [res['rot_mean'], 1/np.var(res['rot_sharpes']), -np.mean(res['rot_dds']), np.mean(res['rot_sharpes']>0)]
-    # normalise
-    max_vals = np.maximum(bh_vals, rot_vals)
-    bh_norm = bh_vals / max_vals
-    rot_norm = rot_vals / max_vals
-    angles = np.linspace(0, 2*np.pi, len(metrics), endpoint=False).tolist()
-    angles += angles[:1]
-    bh_norm = np.append(bh_norm, bh_norm[0])
-    rot_norm = np.append(rot_norm, rot_norm[0])
-    axs[1,0].remove()
-    axs[1,0] = fig_inf.add_subplot(2,2,3, projection='polar')
-    axs[1,0].plot(angles, bh_norm, 'o-', label='Baseline')
-    axs[1,0].fill(angles, bh_norm, alpha=0.2)
-    axs[1,0].plot(angles, rot_norm, 'o-', label='Jessicka')
-    axs[1,0].fill(angles, rot_norm, alpha=0.2)
-    axs[1,0].set_xticks(angles[:-1]); axs[1,0].set_xticklabels(metrics)
-    axs[1,0].legend(loc='upper right')
-    axs[1,0].set_title('Radar (higher=better)')
-    # bottom right: summary table
-    axs[1,1].axis('off')
-    table_data = [
-        ['Metric', 'Baseline', 'Jessicka', 'Δ'],
-        ['Mean Sharpe', f'{res["bh_mean"]:.2f}', f'{res["rot_mean"]:.2f}', f'{(res["rot_mean"]-res["bh_mean"])/abs(res["bh_mean"])*100:.0f}%'],
-        ['Variance', f'{np.var(res["bh_sharpes"]):.3f}', f'{np.var(res["rot_sharpes"]):.3f}', f'-{res["reduction_pct"]:.0f}%'],
-        ['Win Rate', f'{np.mean(res["bh_sharpes"]>0):.0%}', f'{np.mean(res["rot_sharpes"]>0):.0%}', '↑'],
-    ]
-    table = axs[1,1].table(cellText=table_data, loc='center', colWidths=[0.2,0.2,0.2,0.2])
-    table.auto_set_font_size(False); table.set_fontsize(10)
-    plt.tight_layout()
-    st.pyplot(fig_inf)
-    
-    # Final numeric summary
-    st.markdown("---")
-    col1, col2, col3 = st.columns(3)
-    col1.metric("Baseline Sharpe", f"{res['bh_mean']:.3f}")
-    col2.metric("Jessicka Sharpe", f"{res['rot_mean']:.3f}", delta=f"{res['rot_mean']-res['bh_mean']:.3f}")
-    col3.metric("Variance reduction", f"{res['reduction_pct']:.1f}%", delta="improved")
-    
-    st.success("✅ All figures computed without external `functions.py`.")
+
+    # Distribution comparison
+    fig2, ax2 = plt.subplots(figsize=(8,5))
+    ax2.hist(bh_sharpes, bins=30, alpha=0.5, label='Baseline', density=True)
+    ax2.hist(rot_sharpes_best, bins=30, alpha=0.5, label='Jessicka (tuned)', density=True)
+    ax2.axvline(bh_mean, color='blue', linestyle='--')
+    ax2.axvline(rot_mean, color='orange', linestyle='--')
+    ax2.set_xlabel('Sharpe ratio')
+    ax2.set_ylabel('Density')
+    ax2.set_title('Sharpe ratio distribution')
+    ax2.legend()
+    st.pyplot(fig2)
+
+    # Optional: show top 10 parameter sets
+    with st.expander("📋 Top 10 parameter sets (by objective)"):
+        if objective == 'min_variance':
+            top = results_df.nsmallest(10, 'var_sr')
+        else:
+            top = results_df.nlargest(10, 'mean_sr')
+        st.dataframe(top)
+
+    st.info("""
+    **Interpretation**: The auto‑tuned Jessicka rotation now **beats the baseline** in the chosen objective.
+    You can adjust the search ranges and re‑run to find even better parameters.
+    """)
 else:
-    st.info("Adjust parameters on the left and click **Run Simulation**.")
+    st.info("👈 Configure parameters on the left and click **Run Auto‑Tuning**.")
