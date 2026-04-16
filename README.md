@@ -136,6 +136,13 @@ In regimes where $\kappa < 4$ (infinite fourth moment):
 2.  **Drawdown Control**: By exiting when $\sigma(n) < 0.5$, the strategy avoids the "long tail" of decay where noise dominates signal.
 3.  **Robustness**: The power-law decay model fits empirical trade sequences better than exponential decay, aligning with neural adaptation literature.
 
+### Visual Summary
+
+We provide a comprehensive infographic (`before_after_infographic.png`) that visualizes the reduction in estimator variance and the shift in performance distribution.
+
+![Infographic Preview](before_after_infographic.png)
+*Figure: Comparison of Sharpe Ratio distributions and stability metrics between the static SSRN baseline and the adaptive Jessicka rotation strategy.*
+
 ## Pre-Analysis Plan (PAP) Compliance
 
 This project adheres to the **Double-Blind** protocol outlined in the Whitepaper:
