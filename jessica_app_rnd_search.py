@@ -365,46 +365,7 @@ if run_button:
     ax_abl.set_ylabel('Mean Sharpe'); ax_abl.set_title('Ablation study')
     st.pyplot(fig_abl)
 
-    # ---------- Stunning infographic (simplified but complete) ----------
-    fig_inf, axs = plt.subplots(2,2, figsize=(12,10))
-    # top left: distribution
-    axs[0,0].violinplot([bh_sharpes, rot_sharpes], positions=[1,2], showmeans=True)
-    axs[0,0].set_xticks([1,2]); axs[0,0].set_xticklabels(['Baseline','Jessicka'])
-    axs[0,0].set_ylabel('Sharpe'); axs[0,0].set_title('Distribution')
-    # top right: variance bar
-    axs[0,1].bar(['Baseline','Jessicka'], [bh_var, rot_var], color=['#1f77b4','#ff7f0e'])
-    axs[0,1].set_title(f'Variance ↓{var_reduction:.0f}%')
-    # bottom left: radar
-    metrics = ['Mean Sharpe', 'Stability', 'Drawdown', 'Win Rate']
-    bh_vals = [bh_mean, 1/bh_var, -np.mean(bh_dds), np.mean(bh_sharpes>0)]
-    rot_vals = [rot_mean, 1/rot_var, -np.mean(rot_dds), np.mean(rot_sharpes>0)]
-    max_vals = np.maximum(bh_vals, rot_vals)
-    bh_norm = bh_vals / max_vals
-    rot_norm = rot_vals / max_vals
-    angles = np.linspace(0, 2*np.pi, len(metrics), endpoint=False).tolist()
-    angles += angles[:1]
-    bh_norm = np.append(bh_norm, bh_norm[0])
-    rot_norm = np.append(rot_norm, rot_norm[0])
-    axs[1,0].remove()
-    axs[1,0] = fig_inf.add_subplot(2,2,3, projection='polar')
-    axs[1,0].plot(angles, bh_norm, 'o-', label='Baseline')
-    axs[1,0].fill(angles, bh_norm, alpha=0.2)
-    axs[1,0].plot(angles, rot_norm, 'o-', label='Jessicka')
-    axs[1,0].fill(angles, rot_norm, alpha=0.2)
-    axs[1,0].set_xticks(angles[:-1]); axs[1,0].set_xticklabels(metrics)
-    axs[1,0].legend(loc='upper right'); axs[1,0].set_title('Radar (higher=better)')
-    # bottom right: summary table
-    axs[1,1].axis('off')
-    table_data = [
-        ['Metric', 'Baseline', 'Jessicka', 'Δ'],
-        ['Mean Sharpe', f'{bh_mean:.2f}', f'{rot_mean:.2f}', f'{mean_improve:.0f}%'],
-        ['Variance', f'{bh_var:.3f}', f'{rot_var:.3f}', f'-{var_reduction:.0f}%'],
-        ['Win Rate', f'{np.mean(bh_sharpes>0):.0%}', f'{np.mean(rot_sharpes>0):.0%}', '↑']
-    ]
-    table = axs[1,1].table(cellText=table_data, loc='center', colWidths=[0.2,0.2,0.2,0.2])
-    table.auto_set_font_size(False); table.set_fontsize(10)
-    plt.tight_layout()
-    st.pyplot(fig_inf)
+
 
     st.info(f"🎉 Jessicka rotation beats baseline: {objective.replace('_',' ')} improved by "
             f"{abs(best_score):.3f} (tuned) vs baseline {bh_var if objective=='min_variance' else bh_mean:.3f}.")
