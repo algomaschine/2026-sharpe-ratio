@@ -113,7 +113,8 @@ pip install numpy pandas matplotlib scipy arch statsmodels ray tqdm notebook pap
 1.  Ensure `functions.py` is in the same directory.
 2.  Launch Jupyter:
     ```bash
-    jupyter notebook Jessicka_Enhanced_Sharpe_Ratio.ipynb
+    jupyter notebook Jessicka_Enhanced_Sharpe_Ratio.ipynb # has some minor issues
+    streamlit run jessica_app.py # this one is better!
     ```
 3.  Run all cells. The notebook will:
     *   Reproduce Figure 1 from the SSRN paper.
